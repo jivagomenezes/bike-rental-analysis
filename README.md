@@ -1,40 +1,114 @@
-Project Overview
-The purpose of this project is to create a data pipeline and database structure for analyzing bike rental data. This analysis includes identifying key metrics related to ride durations, bike usage patterns, and how external factors like weather conditions might influence rental behavior. This project demonstrates my skills in data engineering, SQL, and Python, while also illustrating my design choices to create analytics-ready datasets.
+# Bike Rental Data Analytics Project
 
-Data Preparation
-Data Loading and Cleaning
-Data Consolidation
-The raw data consists of multiple CSV files, which I loaded into individual pandas DataFrames, then merged into a single DataFrame. This consolidation provides a unified view of all bike rentals, enabling analysis across different timeframes.
+## Project Overview
+This project creates a database structure and pipeline for analyzing bike rental data, focusing on ride durations, usage patterns, and the impact of factors like weather. The project demonstrates my skills in data processing with Python and pandas, SQL, and data engineering.
 
-Missing Data
-I analyzed missing data to understand its extent and impact. For User Type (less than 1% missing), I chose to drop rows with missing values. For missing values in Birth Year (~10%), I used multiple imputation to estimate values based on related features.
+## Development Process
 
-Data Type Consistency
-Ensuring the correct data types for each column was critical to allow for smooth integration with PostgreSQL, especially when dealing with date, integer, and categorical data types.
+### Step 1: Data Loading and Consolidation
 
-Database Design and Table Creation
-Database Structure
-Station Table: The station_table includes station IDs, names, and geographical coordinates, allowing for spatial analysis of station-specific data.
-Bike Table: The bike_table stores unique bike IDs, providing a reference for each bike's journey across rentals.
-Rentals Table: This main table links all trip information, including duration, start/end times, and user demographics. It serves as the core of the analysis, enabling easy integration with external datasets, like weather data.
-Data Ingestion into PostgreSQL
-Using SQLAlchemy, I created the Stations, Bikes, and Rentals tables in PostgreSQL. The IF EXISTS condition in each table creation ensured data consistency during development, preventing duplication and versioning conflicts.
+#### Directory and File Selection
+I specified the directory containing CSV files and filtered for files ending with `tripdata.csv`, which contain relevant bike rental data.
 
-Creating Analytical Views
-To support the analytics team, I created views to answer potential analyst questions:
+```python
+csv_dir = "/home/jivagomenezes/projects/code-academy/bike-rental/bike-rental-starter-kit/data"
+csv_files = [f for f in os.listdir(csv_dir) if f.endswith('tripdata.csv')]
+```
 
-User Behavior Patterns
-Views that analyze popular stations, average ride durations by user type, and how age impacts ride duration. These views aggregate data at daily, weekly, and monthly levels to reveal patterns and seasonality.
+#### Loading and Concatenating Data
+Each CSV file was loaded into a pandas DataFrame, and all DataFrames were concatenated into a single `final_dataframe` to provide a unified dataset. This approach allows for more efficient data processing and analytics across all data.
 
-Weather Impact
-By joining with external weather data, I created views to analyze metrics like total rentals on rainy days versus sunny days. I used an hourly breakdown to account for weather variability, which directly influences ridership.
+```python
+dataframes = [pd.read_csv(os.path.join(csv_dir, file)) for file in csv_files]
+final_dataframe = pd.concat(dataframes, ignore_index=True)
+```
 
-Data Quality Considerations
-Data Gaps and Anomalies:
-Each view includes calculations for null counts in essential fields and outlier detection in Duration. This allows analysts to quickly assess data integrity and identify any areas where caution is warranted.
+### Step 2: Data Exploration and Quality Check
 
-Sorting and Filtering:
-Each view is sorted based on relevance, e.g., descending by total rentals or average ride duration, enabling quick access to the most impactful data.
+#### Initial Inspection
+Basic inspection of the data structure and summary statistics was done to understand the contents and distribution of data values.
 
-Reflections and Next Steps
-This project illustrates my approach to creating a robust analytics environment, with attention to data integrity and relevance to end users. Next, I’d like to integrate more advanced data pipelines, possibly with Apache Spark, to improve efficiency for larger datasets and further automate data quality checks.
+```python
+print(final_dataframe.head())
+print(final_dataframe.describe())
+print(final_dataframe.isna().sum())
+```
+
+#### Missing Data Analysis
+Calculated missing data as a percentage of total records to understand the extent of missing values in each column.
+
+```python
+missing_data = final_dataframe.isna().sum() / len(final_dataframe) * 100
+```
+
+#### Handling Missing Data
+
+- **User Type Column**: Less than 1% missing values. Dropped rows with missing User Type since it represents a small fraction.
+- **Birth Year Column**: 10% missing values. Applied Multiple Imputation using `sklearn`’s `IterativeImputer` to estimate values based on related data.
+
+```python
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+
+imputer = IterativeImputer(max_iter=10, random_state=0)
+final_dataframe['Birth Year'] = imputer.fit_transform(final_dataframe[['Birth Year']])
+```
+
+### Step 3: Data Preparation for Database Ingestion
+
+#### 1. Creating the Station Table
+- **Column Selection**: Selected only columns related to station details (`Start Station ID`, `Start Station Name`, etc.) and removed duplicates to create a distinct table for stations.
+- **Column Renaming and Type Conversion**: To match SQL table requirements and for consistency, column names were converted to lowercase and spaces replaced with underscores.
+
+```python
+station_table = final_dataframe[['Start Station ID', 'Start Station Name', 'Start Station Latitude', 'Start Station Longitude']].drop_duplicates()
+station_table.columns = ['station_id', 'station_name', 'latitude', 'longitude']
+```
+
+#### 2. Creating the Bike Table
+- **Column Selection**: Selected `Bike ID` as a unique identifier and removed duplicates to create a clean, distinct table for bike IDs.
+
+```python
+bike_table = final_dataframe[['Bike ID']].drop_duplicates()
+bike_table.columns = ['bike_id']
+```
+
+#### 3. Creating the Rentals Table
+- **Column Selection and Renaming**: The main table `rentals_table` includes all trip-related data. Columns were renamed for consistency and index was reset to create a `trip_id` column for unique identification.
+- **Data Type Conversion**: Ensured all columns have the correct data types before ingestion into the PostgreSQL database.
+
+```python
+rentals_table['start_time'] = pd.to_datetime(rentals_table['start_time'])
+rentals_table['duration'] = rentals_table['duration'].astype(int)
+```
+
+### Step 4: Database Ingestion with SQLAlchemy
+Using `SQLAlchemy`, I established a connection to a PostgreSQL database and inserted each table using `to_sql`. The `if_exists='replace'` condition ensures that tables are updated with each run, preventing data duplication.
+
+```python
+from sqlalchemy import create_engine
+
+engine = create_engine('postgresql://postgres:postgres@localhost:5432/postgres')
+station_table.to_sql('Stations', engine, if_exists='replace', index=False)
+bike_table.to_sql('Bikes', engine, if_exists='replace', index=False)
+rentals_table.to_sql('Rentals', engine, if_exists='replace', index=False)
+```
+
+### Step 5: Considerations for Analytical Views
+
+#### Analyst Questions
+Common questions include identifying popular stations, rental patterns by time, and how factors like age and gender influence ride behavior.
+
+#### Aggregations for Time-Based Analysis
+Created views with daily, weekly, and monthly aggregates to support analyses on rental trends and seasonality.
+
+#### Integrating Weather Data
+Weather data was incorporated to assess the impact on ridership, making it possible to see differences in rentals on rainy versus sunny days.
+
+#### Data Quality Checks
+Included null count and outlier detection in each view to ensure data quality, allowing analysts to focus on accurate data insights.
+
+This setup not only provides the analytics team with essential insights into bike rentals but also addresses data quality issues and prepares for further integrations, such as weather impacts on usage patterns.
+```
+
+To use this in your README on GitHub, simply copy and paste this entire section directly into your `README.md` file.
